@@ -1,0 +1,231 @@
+---
+title: "R Markdown Implicit system views"
+author: "Christa Blokhuis"
+date: "2023-08-10"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Some details about the study and this document.
+
+During eight interviews with experts in the field of protein transition, participants were asked to draw a causal loop diagram (CLD) based on a provided set of variables. By doing so, we would gain more insight in the diversity of approaches to consumption practices of protein sources and get a general idea of which variables are considered important in explaining consumption. Participants were asked to elicit their choices. In this R Markdown document, some explorative analysis of the interview transcripts and labelling is performed. 
+
+## R Markdown
+
+```{r count_dependent_variables, echo = FALSE, warning=FALSE, message=FALSE}
+## -- set up
+
+#load packages
+library(tidyverse)
+library(janitor)
+library(viridis)
+library(visNetwork)
+
+#load data
+myFile <- "..." #fill out file location of "labels_coding.csv"
+
+data_labels <- read_delim(file = myFile,
+                                delim = ";", 
+                                col_names = TRUE)
+
+myPalette <- c("lightpink", "lightgreen", "lightgrey", "lightskyblue", "lavender", "lightyellow", "lightsalmon", "darkgrey" )
+
+participant_sequence <- c("one", "two", "three","four","five","six","eight","nine")
+DONE_levels_sequence <- c("environment", "interpersonal", "individual", "policy", "demographics", "new", "behaviour")
+
+
+data_labels <- clean_names(data_labels)
+data_labels$deductive_coding_systems_thinking <- sapply(data_labels$deductive_coding_systems_thinking,
+                                    function(x) { gsub("[\r\n]", "", x) })
+data_labels$variables_mentioned_by_expert <- sapply(data_labels$variables_mentioned_by_expert,
+                                    function(x) { gsub("[\r\n]", "", x) })
+
+
+
+
+#show head of data
+head(data_labels)
+nrow(data_labels)
+```
+
+### Count variables mentioned by experts in their narrative
+
+```{r count_variable_use, echo = FALSE, warning=FALSE, message=FALSE}
+
+#split column containing variables into separate columns
+
+data_vars_split <- data_labels %>%
+  separate(col = variables_mentioned_by_expert, 
+           c("var1","var2","var3","var4","var5","var6","var7","var8"),
+           sep = ", ",
+           fill = "right")
+
+
+
+#pivot the three columns with labels to create one column of variables per participant
+
+data_vars_pivot <- data_vars_split %>%
+  pivot_longer(cols = c("var1","var2","var3","var4","var5","var6","var7","var8"),
+               names_to = "var_names",
+               values_to = "variables")
+
+#clean up unnessecary rows and column
+data_vars_clean <- data_vars_pivot[,-c(3,4)]
+data_vars_clean <- data_vars_clean %>%
+  filter(!is.na(variables))
+
+#count number of variables per participant
+
+data_vars_count <- data_vars_clean %>%
+  group_by(variables, participant) %>%
+  summarize(count_vars = n())
+
+#set order of participants for legend of plot
+
+data_vars_count$participant <- factor(data_vars_count$participant,
+                                      levels = participant_sequence)
+
+#since too many variables, group them per DONE scale level
+myFile <- "..." # fill out file location of "vars_groups.csv" 
+
+vars_groups <- read_csv(file = myFile, 
+                        col_names = TRUE)
+colnames(vars_groups)[1] <- "variables"
+
+
+#add group name to each variable
+data_vars_count_groups <- left_join(data_vars_count, vars_groups, 
+                                    by = c("variables"))
+
+#plot label count in histogram per participant
+
+ggplot(data_vars_count_groups, 
+       aes(x = variables, y = count_vars, fill = participant)) +
+  geom_bar(position = "stack", stat = "identity") +
+  geom_text(aes(label = count_vars), 
+            size = 2,
+            position = position_stack(vjust = 0.5)) +
+  scale_fill_manual(values = myPalette) +
+  theme_bw() +
+  coord_flip() +
+  labs(title = "Frequency of variables mentioned in interview per participant",
+       x = "Variables", 
+       y = "Number of variables used", 
+       fill = "Participants") +
+  theme(axis.text.y = element_text(size = 8))
+
+# ======
+
+#if necessary, complete columns of group names manually; otherwise, skip to after ======
+
+setwd("...") # set your working directory to export the below file
+
+#export and add group names that turned NA by hand
+write.csv(data_vars_count_groups, file = "data_vars_count_groups.csv", sep = ";")
+
+
+#import the file with complete column of group names
+
+myFile <- "..." # fill out file location of "data_vars_count_groups_final.csv" 
+
+data_vars_count_groups_final <- read_delim(file = myFile,
+                                delim = ";", 
+                                col_names = TRUE)
+                                    
+#plot DONE levels per participant mentioned in interview
+
+#create data frame with count per DONE scale level
+
+data_groups_count <- data_vars_count_groups_final %>%
+  group_by(group, participant) %>%
+  summarize(count_groups = n())
+
+#create color table for groups:
+
+myPalette_groups <- c("lightpink", "lightgreen", "lightgrey", "lightskyblue", "lavender", "lightyellow", "lightsalmon")
+
+color_table <- tibble(
+  color = myPalette_groups,
+  group = DONE_levels_sequence
+)
+
+#set order of groups for legend of plot
+
+data_groups_count$group <- factor(data_groups_count$group,
+                                      levels = color_table$group)
+
+ggplot(data_groups_count, aes(x = participant, y = count_groups, fill = group)) +
+  geom_bar(position = "stack", stat = "identity") +
+  geom_text(aes(label = count_groups), 
+            size = 2,
+            position = position_stack(vjust = 0.5)) +
+  scale_fill_manual(values = color_table$color) +
+  theme_bw() +
+  labs(x = "Participants", y = "Number of variables mentioned", fill = "Scale level") +
+  scale_x_discrete(limits = participant_sequence)
+
+# ======
+
+
+```
+### Count deductive labels used to code narrative
+
+```{r count_deductive_labels, echo = FALSE, warning=FALSE, message=FALSE}
+
+#remove mistake labels
+data_labels <- data_labels %>%
+  filter(deductive_coding_systems_thinking != "Definition of variables",
+         deductive_coding_systems_thinking != " ",
+         deductive_coding_systems_thinking != "Definition of meat alternatives",
+         deductive_coding_systems_thinking != "Relationships between variables;Relevancy of population")
+
+#split column containing deductive labels into separate columns
+
+data_labels_split <- data_labels %>%
+  separate(col = deductive_coding_systems_thinking, 
+           c("label1","label2","label3"),
+           sep = ",",
+           fill = "right")
+
+#pivot the three columns with labels to create one column of labels per participant
+
+data_labels_pivot <- data_labels_split %>%
+  pivot_longer(cols = c("label1","label2","label3"),
+               names_to = "labels",
+               values_to = "deductive_label")
+
+#clean up unnessecary rows and column
+data_labels_clean <- data_labels_pivot[,-3]
+data_labels_clean <- data_labels_clean %>%
+  filter(!is.na(deductive_label))
+
+
+#count number of data labels per participant
+
+data_labels_count <- data_labels_clean %>%
+  group_by(deductive_label, participant) %>%
+  summarize(count_labels = n())
+
+#set order of participants for legend of plot
+data_labels_count$participant <- factor(data_labels_count$participant,
+                                      levels = participant_sequence)
+
+#plot label count in histogram per participant
+
+ggplot(data_labels_count, 
+       aes(x = deductive_label, y = count_labels, fill = participant)) +
+  geom_bar(position = "stack", stat = "identity") +
+  geom_text(aes(label = count_labels), 
+            size = 2,
+            position = position_stack(vjust = 0.5)) +
+  scale_fill_manual(values = myPalette) +
+  theme_bw() +
+  theme(legend.title=element_text(size=10), 
+    legend.text=element_text(size=8)) +
+  coord_flip() +
+  labs(x = "Labels", y = "Number of labels used", fill = "Participant") 
+
+```

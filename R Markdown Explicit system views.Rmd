@@ -1,0 +1,1190 @@
+---
+title: "R Markdown Explicit system views"
+author: "Christa Blokhuis"
+date: "2023-08-10"
+output:
+  word_document: default
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width = 12, fig.height = 8)
+```
+
+## Some details about the study and this document.
+
+During eight interviews with experts in the field of protein transition, participants were asked to draw a causal loop diagram (CLD) based on a provided set of variables. By doing so, we would gain more insight in the diversity of approaches to consumption practices of protein sources and get a general idea of which variables are considered important in explaining consumption. Participants were asked to elicit their choices. In this R Markdown document, tidied up versions of the CLDs can be exported to your local folder (when opened in R) and some exploratory analysis about the frequency of choice for variables and relationships is presented. 
+
+NOTE Turn off the code chunk r save_CLDs when knitting the R Markdown.
+NOTE Run this R Markdown first before running R Markdown Implicit system views
+
+```{r count_dependent_variables, echo = FALSE, warning=FALSE, message=FALSE}
+## -- set up
+
+#load packages
+library(tidyverse)
+library(janitor)
+library(viridis)
+library(visNetwork)
+
+#load data
+myFile <- "..." #fill out file location of "all_cd_data_clean_perparticipant.csv" 
+
+all_cd_data_clean <- read_delim(file = myFile,
+                                delim = ";", 
+                                col_names = TRUE)
+
+myPalette <- c("lightpink", "lightgreen", "lightgrey", "lightskyblue", "lavender", "lightyellow", "lightsalmon" )
+
+participant_sequence <- c("one","three","four","five","six","eight","nine")
+```
+
+### Data sample:
+
+```{r show_data, echo = FALSE, warning=FALSE, message=FALSE}
+#show head of data
+head(all_cd_data_clean)
+## -- create nodes_groups data frame
+
+sks <- all_cd_data_clean
+
+### --- data wrangling to set up nodes and edges of the causal diagram
+
+#check double input (by accident)
+sks <- sks %>%
+  unique() 
+
+#create data frame for 'from' and rename column to 'label'
+from <- sks %>%
+  distinct(From) %>%
+  rename(label = From)
+
+#create data frame for 'to' and rename column to 'label'
+to <- sks %>%
+  distinct(To) %>%
+  rename(label = To) 
+
+#create data frame with only the unique variables
+nodes <- full_join(from, to, by = "label")
+
+#add column with id for each variable
+nodes <- nodes %>% rowid_to_column("id")
+
+#create data frame of all unique labels and corresponding groups
+group_from <- sks %>%
+  select(From,Group_From) %>%
+  rename(label = From,
+         group = Group_From)
+
+group_to <- sks %>%
+  select(To,Group_To) %>%
+  rename(label = To,
+         group = Group_To)
+
+label_groups <- rbind(group_from,group_to) 
+
+#export label_groups to be used in R Markdown Implicit systems thinking R Markdown
+MyPath <- "..." #fill out file location of the file (to be written) "vars_groups.csv"
+
+write_csv(label_groups,
+          path = MyPath)
+
+label_groups <- label_groups %>%
+  distinct()
+
+#add groups to unique labels in nodes data frame
+nodes_groups <- left_join(nodes, label_groups, by = "label")
+
+#rearrange order of groups so they are plotted in a cluster/next to each other
+nodes_groups <- arrange(nodes_groups, desc(group))
+
+
+## -- create count of each variable from all_cd_data_clean
+from_variables <- as_tibble(all_cd_data_clean$From)
+to_variables <- as_tibble(all_cd_data_clean$To)
+
+count_variables <- rbind(from_variables,to_variables)
+
+count_variables <- count_variables %>%
+  rename(variable = value) %>%
+  group_by(variable) %>%
+  summarize(count = n())
+
+#include DONE categories as well in data frame
+#NOTE this is not just independent variables anymore
+count_groups_indep_variables <- left_join(count_variables, nodes_groups, by = c("variable" = "label"))
+
+#create color table for groups:
+
+color_table <- tibble(
+  color = myPalette,
+  group = c("environment", "interpersonal", "individual", "policy", "demographics", "new", "behaviour")
+  )
+
+#add levels to groups that correspond to color_table
+count_groups_indep_variables$group <- factor(count_groups_indep_variables$group, 
+                                       levels = color_table$group)
+```
+
+
+### Gross count of variable use per DONE category
+This graph shows how often each variable is used by all participants, both to connect from other variables, and to connect to other variables.
+```{r gross_count, echo = FALSE, warning=FALSE, message=FALSE}
+### --- A FINAL GRAPH
+#plot use count of variables labeled by DONE category
+
+ggplot(count_groups_indep_variables, aes(fct_reorder(variable, count), count, fill = group)) +
+  geom_col() +
+  coord_flip() +
+  theme_bw() +
+  geom_text(aes(x = variable, y = count, label = count),
+            hjust = -0.5, size = 2.5) +
+  scale_fill_manual(values = myPalette) +
+  labs(x = "Variable", y = "Count") +
+  ggtitle("Gross count of variable use per DONE category for all participants")
+```
+
+
+### Net variable use per participant
+This graph shows which variables are used by the participants.
+
+```{r net_count, echo = FALSE, warning=FALSE, message=FALSE}
+#create vector of participants
+participant2 <- unique(all_cd_data_clean$participant)
+
+#create list with data frame for each participant
+list_dfs <- list()
+for (i in participant2){
+  
+  name <- paste("participant", i, sep="_")
+  tmp_data <- subset(all_cd_data_clean, participant == i)
+  list_dfs[[name]] <- tmp_data
+  
+}
+
+#create list of data frames counting variable use per participant
+list_dfs_netcount_pp <- list()
+for (i in 1:length(list_dfs)) {
+  
+  from_variables <- as_tibble(list_dfs[[i]]$From)
+  to_variables <- as_tibble(list_dfs[[i]]$To)
+  
+  #net count per participant (pp), is similar for each participant
+  net_count_variables_pp <- rbind(from_variables,to_variables)
+  net_count_variables_pp <- unique(net_count_variables_pp)
+  
+  net_count_variables_pp <- net_count_variables_pp %>%
+    rename(variable = value) %>%
+    group_by(variable) %>%
+    summarize(count = n())
+  
+  name <- paste("participant", i, sep="_")
+  list_dfs_netcount_pp[[name]] <- net_count_variables_pp
+  
+}
+
+#turn list elements into data frames and rbind them
+net_count_variables <- bind_rows(list_dfs_netcount_pp)
+
+
+net_count_variables <- net_count_variables %>%
+  group_by(variable) %>%
+  summarize(count = n())
+
+#include DONE categories as well in data frame
+net_count_group_variables <- left_join(net_count_variables, nodes_groups, by = c("variable" = "label"))
+
+#create color table for groups:
+color_table <- tibble(
+  color = myPalette,
+  group = c("environment", "interpersonal", "individual", "policy", "demographics", "new", "behaviour")
+)
+
+#add levels to groups that correspond to color_table
+net_count_group_variables$group <- factor(net_count_group_variables$group, 
+                                             levels = color_table$group)
+
+### --- A FINAL GRAPH 2
+#plot use count of "dependent variables" labeled by DONE category
+ggplot(net_count_group_variables, aes(fct_reorder(variable, count), count, fill = group)) +
+  geom_col() +
+  coord_flip() +
+  theme_bw() +
+  geom_text(aes(x = variable, y = count, label = count),
+            hjust = -0.5, size = 2) +
+  scale_fill_manual(values = color_table$color) +
+  labs(x = "Variable", y = "Count") +
+  ggtitle("Net count of variable use per DONE category for all participants")
+
+```
+
+### Net count variable use all participants top five without behaviour variables
+```{r net_count_topfive, echo = FALSE, warning=FALSE, message=FALSE}
+
+topfive_netcount_vars <- net_count_group_variables %>%
+  filter(group != "behaviour") %>%
+  arrange(desc(count)) %>%
+  filter(count <= 5)
+
+ggplot(topfive_netcount_vars, aes(fct_reorder(variable, count), count, fill = group)) +
+  geom_col() +
+  coord_flip() +
+  theme_bw() +
+  geom_text(aes(x = variable, y = count, label = count),
+            hjust = -0.5, size = 2.5) +
+  scale_fill_manual(values = color_table$color) +
+  labs(x = "Variable", y = "Count") +
+  ggtitle("Net count variable use all participants top five")
+
+```
+
+
+### Average variable use per participant
+```{r mean_variable_use, echo = FALSE, warning=FALSE, message=FALSE}
+#split data frame into participants
+
+library(knitr)
+library(kableExtra)
+
+participant2 <- unique(all_cd_data_clean$participant)
+
+list_var_ppart <- list()
+list_var_counts <- list()
+
+for (i in participant2){
+  
+  participantX_vars <- all_cd_data_clean %>%
+    filter(participant == i)
+  
+  #keep only unique variables in both To and From
+  from <- participantX_vars %>%
+    select(From) %>%
+    rename(variables = From)
+  
+  to <- participantX_vars %>%
+    select(To) %>%
+    rename(variables = To)
+  
+  vars <- rbind(from,to)
+  
+  vars2 <- vars %>%
+    distinct(variables, .keep_all = TRUE)
+  
+  name <- paste("vars_participant", i, sep = "_")
+  list_var_ppart[[name]] <- vars2
+  
+  #count number of variables per participant
+  vars_final <- vars2 %>%
+    summarise(var_count = n())
+  
+  name <- paste("vars_participant", i, sep = "_")
+  list_var_counts[[name]] <- vars_final
+}
+
+#bind data frames together
+var_participants <- data.frame(participant = participant2)
+vars_row <- bind_rows(list_var_counts)
+vars_count <- cbind(var_participants,vars_row)
+
+vars_count <- vars_count %>%
+  rename(variables = var_count)
+  
+
+#plot in bar chart
+
+ggplot(data = vars_count, aes(x = participant, y = variables)) +
+  geom_bar(stat = "identity", fill = myPalette[4]) +
+  scale_x_discrete(limits = participant_sequence) +
+  theme_bw() +
+  theme(legend.position = "none")
+
+#provide average
+average_var_use <- mean(vars_count$variables)
+round(average_var_use,0)
+
+average_var_use <- data.frame(metric = "average",
+                                 average = round(mean(vars_count$variables),0))
+#plot in table
+kable(average_var_use) 
+
+```
+
+### Variable use by participants  per DONE category
+```{r variable_use_DONE, echo = FALSE, warning=FALSE, message=FALSE}
+
+#use list_var_ppart
+participant2 <- unique(all_cd_data_clean$participant)
+
+list_vars_parts <- list()
+
+for(i in 1:length(participant2)) {
+  
+  #add column with participant name and only keep unique variables
+  participantX_vars_parts <- list_var_ppart[[i]] %>%
+    mutate(participant = participant2[[i]]) %>%
+    distinct(variables, .keep_all = TRUE)
+
+  name <- paste("vars_participant", participant2[[i]], sep = "_")
+  list_vars_parts[[name]] <- participantX_vars_parts
+  
+}
+
+#glue data frames together
+vars_parts <- bind_rows(list_vars_parts)
+
+#add DONE category names
+
+vars_parts_groups <- left_join(vars_parts, nodes_groups, by = c("variables" = "label"))
+
+count_DONE_participants <- vars_parts_groups %>%
+  group_by(group, participant) %>%
+  summarize(count_vars = n())
+
+count_DONE_participants$group <- factor(count_DONE_participants$group, 
+                                       levels = color_table$group)
+
+ggplot(count_DONE_participants, aes(x = participant, y = count_vars, fill = group)) +
+  geom_bar(position = "stack", stat = "identity") +
+  geom_text(aes(label = count_vars), 
+            size = 3,
+            position = position_stack(vjust = 0.5)) +
+  scale_fill_manual(values = myPalette) +
+  theme_bw() +
+  theme(legend.title=element_text(size=15), 
+    legend.text=element_text(size=12)) +
+  labs(x = "Participants", y = "Number of variables used", fill = "Scale level") +
+  scale_x_discrete(limits = participant_sequence[-2])
+  
+```
+
+### Data preparation for CLD export
+Prepare data CLD per participant (not shown in R Markdown)
+
+```{r CLD_data_per_participant, echo = FALSE, warning=FALSE, message=FALSE}
+#first, create nodes
+participant2 <- unique(all_cd_data_clean$participant)
+
+list_dfs_nodes <- list()
+
+for (i in participant2){
+  
+  participantX_cd_data <- all_cd_data_clean %>%
+    mutate(borderWidth = if_else(participant == i, 2, 0.5),
+           color.border = if_else(participant == i, "black", NULL))
+
+  from <- participantX_cd_data %>%
+    distinct(From) %>%
+    rename(label = From)
+
+  #create data frame for 'to' and rename column to 'label'
+  to <- participantX_cd_data %>%
+    distinct(To) %>%
+    rename(label = To)
+
+  #create data frame with only the unique variables
+  nodes <- full_join(from, to, by = "label")
+
+  #add column with id for each variable
+  nodes <- nodes %>% rowid_to_column("id")
+
+  #create data frame of all unique labels and corresponding groups
+  group_from <- participantX_cd_data %>%
+    select(From,Group_From, color.border, borderWidth, participant) %>%
+    rename(label = From,
+           group = Group_From)
+
+  group_to <- participantX_cd_data %>%
+    select(To,Group_To, color.border, borderWidth, participant) %>%
+    rename(label = To,
+           group = Group_To)
+
+  label_groups <- rbind(group_from,group_to)
+
+  label_groups <- label_groups %>%
+    distinct()
+
+  #add groups to unique labels in nodes data frame
+  nodes_groups <- left_join(nodes, label_groups, by = "label")
+
+  #select variables that are selected by participant X
+  participantX_nodes_groups <- nodes_groups %>%
+    filter(participant == i) %>%
+    distinct(label, .keep_all = TRUE)
+
+  #and select the resulting variables that were not selected by participant X
+  notparticipantX_nodes_groups <- nodes_groups %>%
+    filter(participant != i) %>%
+    distinct(label, .keep_all = TRUE)
+
+  #merge data frames
+  nodes_groups_binded <- rbind(participantX_nodes_groups, notparticipantX_nodes_groups)
+
+  #filter variables that were selected by both participant X and other participants
+  nodes_groups <- nodes_groups_binded %>%
+    distinct(label, .keep_all = TRUE)
+
+  nodes_groups <- arrange(nodes_groups, desc(group))
+  ## -- create edges based on variables selected by participant X
+  #filter variables selected by participant X
+  
+  #assign each participant's data frame its correct name and add it to the list
+  #name <- paste("nodes_participant", i, sep="_")
+  name <- i
+  list_dfs_nodes[[name]] <- nodes_groups
+
+}
+
+#second, create edges
+participant2 <- unique(all_cd_data_clean$participant)
+
+list_dfs_edges <- list()
+
+for (i in participant2){
+  
+  participantX_edges <- all_cd_data_clean %>%
+    filter(participant == i)
+  
+  #create data frame with separate columns for to, from and weight (=count, how often is each variable used)
+  weighted_sks <- participantX_edges %>%
+    group_by(From,To) %>%
+    summarize(weight = n())
+  
+  #create data frame with separate columns for to, from and weight (=count, how often is each variable used)
+  #include Polarity for dashes and colors
+  dashes_color <- participantX_edges %>%
+    mutate(dashes = Polarity,
+           color = Polarity) %>%
+    mutate(dashes = replace(dashes, dashes == "plus", FALSE),
+           dashes = replace(dashes, dashes == "minus", TRUE),
+           color = replace(color, color == "plus", "black"),
+           color = replace(color, color == "minus", "grey")) %>%
+    select(From, To, dashes, color, participant)
+  
+  dashes_color$dashes <- as.logical(dashes_color$dashes)
+  
+  #join dashes_color with nodes
+  dashes_color2 <- dashes_color %>%
+    left_join(nodes, by = c("From" = "label")) %>%
+    rename(from = id)
+  
+  dashes_color2 <- dashes_color2 %>%
+    left_join(nodes, by = c("To" = "label")) %>% 
+    rename(to = id)
+  
+  #create data frame 'edges' that contains id's for each From variable, and the weight
+  edges <- weighted_sks %>%
+    left_join(nodes, by = c("From" = "label")) %>%
+    rename(from = id)
+  
+  #add id's for each To variable and rename id to to
+  edges <- edges %>% 
+    left_join(nodes, by = c("To" = "label")) %>% 
+    rename(to = id)
+  
+  #create a width column, width is a network attribute for visNetwork(), to indicate how often
+  #a relationship between variables is drawn
+  edges_concept <- edges %>% 
+    mutate(width = weight*1) 
+  
+  #merge dashes_arrows and edges into one data frame containing all info on edges
+  edges_dc <- dashes_color2 %>%
+    merge(edges_concept, by.x = c("to","from"), by.y = c("to","from")) %>%
+    select(from, to, dashes, color, width, participant) %>%
+    unique()
+  
+  #assign each participant's data frame its correct name and add it to the list
+  #name <- paste("edges_participant", i, sep="_")
+  name <- i
+  list_dfs_edges[[name]] <- edges_dc
+}
+
+
+```
+
+
+### Frequency use of edges
+These graphs show the number of times a specific edge (=connection between two variables) is used
+NOTE Edges only shown when used more than once.
+
+```{r count_edges, echo = FALSE, warning=FALSE, message=FALSE}
+
+library(data.table)
+
+all_nodes <- rbindlist(list_dfs_nodes, use.names = TRUE)
+all_edges <- rbindlist(list_dfs_edges, use.names = TRUE)
+
+#count number of unique edges
+count_all_edges <- all_edges %>%
+  group_by(from,to, dashes, color) %>%
+  count()
+
+#match from and to id's for nodes with names of node id's
+count_all_edges$from_vars <- nodes$label[match(count_all_edges$from, nodes$id)]
+count_all_edges$to_vars <- nodes$label[match(count_all_edges$to, nodes$id)]
+
+#create column with edge names (from - to)
+count_all_edges <- count_all_edges %>%
+  mutate(edge_names = paste(from_vars,to_vars, sep = " - "))
+
+#for to-variables
+
+#create column for grouping to_vars into behavior and other variables
+count_all_edges <- count_all_edges %>%
+  mutate(to_nodes_group = to_vars)
+
+count_all_edges <- count_all_edges %>%
+  mutate(to_nodes_group = replace(to_nodes_group, 
+                                to_nodes_group != "eating meat" & to_nodes_group != "eating plant protein" & to_nodes_group != "eating meat alternatives",
+                                "other"))
+
+
+#for from-variables
+
+#create column for grouping to_vars into behavior and other variables
+#include DONE categories as well in data frame
+count_all_edges <- count_all_edges %>%
+  left_join(nodes_groups, by = c("from_vars" = "label")) %>%
+  select(from, to, n, from_vars, to_vars, edge_names, to_nodes_group, group) %>%
+  rename(from_nodes_group = group)
+
+#create color table for to_variables
+color_table2 <- tibble(
+  color = myPalette[1:4],
+  to_nodes_group = c("eating meat", "eating plant protein", "eating meat alternatives", "other")
+)
+
+#add factor levels to groups that correspond to color_table
+count_all_edges$to_nodes_group <- factor(count_all_edges$to_nodes_group,
+                                         levels = color_table2$to_nodes_group)
+
+#create color table for from_variables:
+color_table <- tibble(
+  color = myPalette,
+  group = c("environment", "interpersonal", "individual", "policy", "demographics", "new", "behaviour")
+)
+
+
+
+#add levels to groups that correspond to color_table
+count_all_edges$from_nodes_group <- factor(count_all_edges$from_nodes_group, 
+                                          levels = color_table$group)
+
+#plot number of times a edge appears
+count_all_edges2andup <- count_all_edges %>%
+  filter(n > 1)
+
+# #export count_all_edges2andup
+# filename <- "C:/Users/blokh005/OneDrive - Wageningen University & Research/Causality_Diagram_SLR/Results/count_all_edges2andup.csv"
+# 
+# write.csv2(count_all_edges2andup, file = filename, sep = ";")
+
+#plots
+ggplot(count_all_edges2andup, aes(fct_reorder(edge_names, n), n, fill = to_nodes_group)) +
+  geom_col() +
+  coord_flip() +
+  theme_bw() +
+  scale_fill_manual(values = color_table2$color) +
+  geom_text(aes(x = edge_names, y = n, label = n),
+            hjust = -0.5, size = 2.5) +
+  labs(x = "Edges", y = "Frequency of use") +
+  ggtitle("Frequency of edge use by all participants - labelled for to-variables")
+
+#plot number of times a edge appears
+ggplot(count_all_edges2andup, aes(fct_reorder(edge_names, n), n, fill = from_nodes_group)) +
+  geom_col() +
+  coord_flip() +
+  theme_bw() +
+  scale_fill_manual(values = color_table$color) +
+  geom_text(aes(x = edge_names, y = n, label = n),
+            hjust = -0.5, size = 2.5) +
+  labs(x = "Edges", y = "Frequency of use") +
+  ggtitle("Frequency of edge use by all participants - labelled for from-variables")
+
+```
+### Number of relationships drawn per participant
+
+```{r nr_of_relationships, echo = FALSE, warning=FALSE, message=FALSE}
+
+#count edges per participant
+
+participant2 <- unique(all_cd_data_clean$participant)
+
+list_edges_counted_pp <- list()
+
+for(i in participant2){
+  
+    edges <- list_dfs_edges[[i]]
+    
+    edges_pp <- edges %>%
+      select(from, to) %>%
+      unique() %>%
+      count() %>%
+      mutate(participant = i)
+    
+    name <- i
+    list_edges_counted_pp[[name]] <- edges_pp
+
+}
+
+edges_pp <- rbindlist(list_edges_counted_pp)
+
+ggplot(edges_pp, aes(x = participant, y = n)) +
+  geom_col(show.legend = FALSE, fill = myPalette[4]) +
+  theme_bw() +
+  geom_text(aes(x = participant, y = n, label = n),
+            vjust = 2.5, size = 2.5) +
+  labs(x = "Participants", y = "Number of relationships drawn per participant") +
+  ggtitle("Number of relationships drawn") +
+  scale_x_discrete(limit = participant_sequence)
+
+```
+
+### Number of relationships drawn between dietary behaviours
+
+```{r nr_of_relationships_db, echo = FALSE, warning=FALSE, message=FALSE}
+
+#count edges per participant per dietary behaviour
+
+participant2 <- unique(all_cd_data_clean$participant)
+
+list_edges_counted_pp_db <- list()
+
+for(i in participant2){
+  
+    edges <- list_dfs_edges[[i]]
+    
+    #add filter for dietary behaviours only
+    edges_pp_db <- edges %>%
+      select(from, to) %>%
+      filter(from == 48 & to == 49 |
+             from == 48 & to == 52 |
+             from == 49 & to == 49 |
+             from == 49 & to == 52 |
+             from == 52 & to == 48 |
+             from == 52 & to == 49) %>%
+      unique() %>%
+      count() %>%
+      mutate(participant = i)
+    
+    name <- i
+    list_edges_counted_pp_db[[name]] <- edges_pp_db
+
+}
+
+edges_pp_db <- rbindlist(list_edges_counted_pp_db)
+
+ggplot(edges_pp_db, aes(x = participant, y = n)) +
+  geom_col(show.legend = FALSE, fill = myPalette[4]) +
+  theme_bw() +
+  geom_text(aes(x = participant, y = n, label = n),
+            vjust = 2.5, size = 2.5) +
+  labs(x = "Participants", y = "Number of relationships drawn between dietary behaviours") +
+  ggtitle("Number of relationships drawn between dietary behaviours") +
+  scale_x_discrete(limit = participant_sequence)
+
+```
+
+
+### Density of CLDs
+
+```{r density, echo = FALSE, warning=FALSE, message=FALSE}
+
+# calculate ratio number of variables / number of edges
+
+# create data frame with number of variables and number of edges for each CLD
+
+variables_pp <- vars_parts_groups %>%
+  select(participant, variables) %>%
+  group_by(participant) %>%
+  count()
+  
+density_pp <- edges_pp %>%
+  left_join(variables_pp, by = "participant") %>%
+  rename(number_of_edges = n.x,
+         number_of_variables = n.y) %>%
+  mutate(ratio = round((number_of_edges / number_of_variables),2)) %>%
+  mutate(potential_connections = (number_of_variables * (number_of_variables-1))/2) %>%
+  mutate(density = round((number_of_edges / potential_connections),2))
+
+density_pp_long <- density_pp %>%
+  pivot_longer(cols=c("ratio","density"),
+               names_to = "network_structure",
+               values_to = "ratio_density")
+
+
+ggplot(density_pp_long, aes(x = participant, y = ratio_density, fill = network_structure)) +
+  geom_col(position = "dodge") +
+  theme_bw() +
+  geom_text(aes(x = participant, y = ratio_density, label = ratio_density),
+            position = position_dodge(width = .9),
+            size = 2, vjust = 1.5) +
+  labs(x = "Participants", y = "Ratio and density", fill = "System structure") +
+  ggtitle("Ratio and density of CLDs") +
+  scale_fill_manual(values = myPalette) +
+  scale_x_discrete(limit = participant_sequence)
+  
+
+
+```
+
+
+
+### Edges inter and intra dietary behaviours
+
+```{r dietary_behaviours, echo = FALSE, warning=FALSE, message=FALSE}
+
+#use text mining, select only edges that contain one of the dietary behaviors
+
+participant2 <- unique(all_cd_data_clean$participant)
+
+list_edges_db_to <- list()
+
+for(i in participant2){
+  
+    edges <- list_dfs_edges[[i]]
+    
+    edges_db_to <- edges %>% 
+      filter(to == 48|49|52) %>%
+      filter(from == 48|49|52) %>%
+      mutate(to = replace(to, to == 48, "eating meat")) %>%
+      mutate(to = replace(to, to == 49, "eating meat alternatives")) %>%
+      mutate(to = replace(to, to == 52, "eating plant protein")) %>%
+      # mutate(from = replace(from, from == 48, "eating meat")) %>%
+      # mutate(from = replace(from, from == 49, "eating meat alternatives")) %>%
+      # mutate(from = replace(from, from == 52, "eating plant protein")) %>%
+      select(to, from) %>%
+      filter(to == "eating meat" | to == "eating meat alternatives" | to == "eating plant protein") %>%
+      group_by(to) %>%
+      count() %>%
+      mutate(participant = i)
+    
+    name <- i
+    list_edges_db_to[[name]] <- edges_db_to
+
+}
+
+list_edges_db_from <- list()
+
+for(i in participant2){
+  
+    edges <- list_dfs_edges[[i]]
+    
+    edges_db_from <- edges %>% 
+      filter(to == 48|49|52) %>%
+      filter(from == 48|49|52) %>%
+      # mutate(to = replace(to, to == 48, "eating meat")) %>%
+      # mutate(to = replace(to, to == 49, "eating meat alternatives")) %>%
+      # mutate(to = replace(to, to == 52, "eating plant protein")) %>%
+      mutate(from = replace(from, from == 48, "eating meat")) %>%
+      mutate(from = replace(from, from == 49, "eating meat alternatives")) %>%
+      mutate(from = replace(from, from == 52, "eating plant protein")) %>%
+      select(to, from) %>%
+      filter(from == "eating meat" | from == "eating meat alternatives" | from == "eating plant protein") %>%
+      group_by(from) %>%
+      count() %>%
+      mutate(participant = i)
+    
+ 
+    
+    name <- i
+    list_edges_db_from[[name]] <- edges_db_from
+
+}
+
+edges_db_to <- rbindlist(list_edges_db_to)
+edges_db_from <- rbindlist(list_edges_db_from)
+
+#plot to dietary behaviors
+ggplot(edges_db_to, aes(x = participant, y = n)) +
+  geom_col(show.legend = FALSE, fill = myPalette[2]) +
+  theme_bw() +
+  facet_wrap(. ~ to) +
+  geom_text(aes(x = participant, y = n, label = n),
+            vjust = 2.5, size = 2.5) +
+  labs(x = "Participants", y = "Number of relatioships drawn") +
+  ggtitle("Number of relationships drawn TO dietary behaviours") +
+  scale_x_discrete(limit = participant_sequence)
+
+#create empty data frame to correct for low count of variables FROM dietary behaviors
+  
+  list_edges_db_from_fake <- list()
+
+for(i in participant2){
+  
+  from <- c("eating meat", "eating meat alternatives", "eating plant protein")
+  n <- c(0,0,0)
+  participant <- c(i, i, i)
+  
+  edges_db_from_fake <- data.frame(from, n, participant)
+  
+    name <- i
+    list_edges_db_from_fake[[name]] <- edges_db_from_fake
+  
+}
+  
+edges_db_from_fake <- rbindlist(list_edges_db_from_fake)
+
+  
+#plot from dietary behaviors
+ggplot(edges_db_from_fake, aes(x = participant, y = n)) +
+  geom_col(show.legend = FALSE) +
+  theme_bw() +
+  facet_wrap(. ~ from) +
+  labs(x = "Participants", y = "Number of relatioships drawn") +
+  ggtitle("Number of relationships drawn FROM dietary behaviours") +
+  geom_col(data = edges_db_from, fill = myPalette[1]) +
+  geom_text(data = edges_db_from, aes(x = participant, y = n, label = n),
+            vjust = 2.5, size = 2.5) +
+  scale_x_discrete(limit = participant_sequence) 
+
+ 
+
+
+
+#combined histogram of relationships drawn TO and FROM dietary behaviours
+ggplot(edges_db_from_fake, aes(x = participant, y = n)) +
+  geom_col(show.legend = FALSE, alpha = 0.2) +
+  theme_bw() +
+  facet_wrap(. ~ to) +
+  labs(x = "Participants", y = "Number of relatioships drawn") +
+  ggtitle("Number of relationships drawn TO and FROM dietary behaviours") +
+  geom_col(data = edges_db_from, fill = myPalette[1], alpha = 0.5) +
+  geom_text(data = edges_db_from, aes(x = participant, y = n, label = n),
+            vjust = 2.5, size = 2.5) +
+  geom_col(data = edges_db_to, fill = myPalette[2], alpha = 0.5) +
+  geom_text(data = edges_db_to, aes(x = participant, y = n, label = n),
+            vjust = 2.5, size = 2.5) +
+  scale_x_discrete(limit = participant_sequence) 
+
+#attempt 2
+ggplot(edges_db_to, aes(x = participant, y = n)) +
+  geom_col(show.legend = FALSE, fill = myPalette[2], alpha = 0.5) +
+  theme_bw() +
+  facet_wrap(. ~ to) +
+  geom_text(aes(x = participant, y = n, label = n),
+            vjust = 2.5, size = 2.5) +
+  geom_col(data = edges_db_from, fill = myPalette[1]) +
+  geom_text(data = edges_db_from, aes(x = participant, y = n, label = n),
+            vjust = 2.5, size = 2.5) +
+  labs(x = "Participants", y = "Number of relatioships drawn") +
+  ggtitle("Number of relationships drawn TO dietary behaviours") +
+  scale_x_discrete(limit = participant_sequence)
+
+
+
+
+```
+
+
+
+### Top five edge-use
+
+```{r count_edges_topfive, echo = FALSE, warning=FALSE, message=FALSE}
+
+topfive_count_edges <- count_all_edges2andup %>%
+  rename(count = n) %>%
+  select(count, edge_names, from_nodes_group, to_nodes_group) %>%
+  arrange(desc(count)) %>%
+  filter(count >= 5)
+  
+
+#plots
+ggplot(topfive_count_edges, aes(fct_reorder(edge_names, count), count, fill = to_nodes_group)) +
+  geom_col() +
+  coord_flip() +
+  theme_bw() +
+  scale_fill_manual(values = myPalette) +
+  geom_text(aes(x = edge_names, y = count, label = count),
+            hjust = -0.5, size = 2.5) +
+  labs(x = "Edges", y = "Frequency of use") +
+  ggtitle("Top 5 frequency of edge use by all participants - labelled for to-variables")
+
+#plot number of times a edge appears
+ggplot(topfive_count_edges, aes(fct_reorder(edge_names, count), count, fill = from_nodes_group)) +
+  geom_col() +
+  coord_flip() +
+  theme_bw() +
+  scale_fill_manual(values = color_table$color) +
+  geom_text(aes(x = edge_names, y = count, label = count),
+            hjust = -0.5, size = 2.5) +
+  labs(x = "Edges", y = "Frequency of use") +
+  ggtitle("Top 5 frequency of edge use by all participants - labelled for from-variables")
+
+```
+
+
+
+### Set up legend and graph elements
+```{r setup_legend_graphs, echo = FALSE, warning=FALSE, message=FALSE}
+
+#set up legend and plotting of nodes and edges
+nodes_DONElevel1 <- c("environment", "interpersonal", "individual", "policy",
+                      "demographics", "behaviour", "new")
+
+nodes_colors <- myPalette
+
+legend_nodes <- data.frame(label = nodes_DONElevel1,
+                           shape = "ellipse",
+                           color = nodes_colors,
+                           title = "nodes_information")
+
+edges_labels <- c("positive feedback", "negative feedback")
+
+edges_colors <- c("black", "grey")
+
+legend_edges <- data.frame(color = edges_colors,
+                           label = edges_labels,
+                           arrows = c("to","to"),
+                           dashes = c(FALSE,TRUE),
+                           font.align = "top")
+```
+
+
+### CLD export
+Plot CLDs, in a circle and nicely (not shown in R Markdown)
+
+```{r list_CLDs, echo = FALSE, warning = FALSE, messge = FALSE}
+
+#plot each participants data (nodes, edges) in a CLD
+
+participant2 <- unique(all_cd_data_clean$participant)
+
+list_clds <- list()
+
+for(i in participant2){
+  
+ title <- paste("participant", i, sep="_")
+  
+  
+    nodes <- list_dfs_nodes[[i]]
+  
+    edges <- list_dfs_edges[[i]]
+
+
+         
+  CLD <- visNetwork(nodes, edges,
+           main = title, width = "100%") %>% 
+  visIgraphLayout(layout = "layout_in_circle",
+                  randomSeed = 1,
+                  smooth = TRUE) %>% 
+  visEdges(arrows = list(to = list(enabled = TRUE, scaleFactor = 0.75)),
+           color = list(color = "grey")) %>%
+  visNodes(shape = "ellipse") %>%
+  visGroups(groupname = "environment", color = myPalette[1]) %>%
+  visGroups(groupname = "interpersonal", color = myPalette[2]) %>%
+  visGroups(groupname = "individual", color = myPalette[3]) %>%
+  visGroups(groupname = "policy", color = myPalette[4]) %>%
+  visGroups(groupname = "demographics", color = myPalette[5]) %>%
+  visGroups(groupname = "behaviour", color = myPalette[6]) %>%
+  visGroups(groupname = "new", color = myPalette[7]) %>%
+  visLegend(addEdges = legend_edges, 
+            addNodes = legend_nodes, width = 0.25, 
+            useGroups = FALSE, position = "left", main = "Legend", ncol = 2)
+  
+
+  
+  # print(CLD)
+
+#assign each participant's data frame its correct name and add it to the list
+  name <- i
+  list_clds[[name]] <- CLD
+  
+
+
+}
+
+participant2 <- unique(all_cd_data_clean$participant)
+
+list_clds_nicely <- list()
+
+for(i in participant2){
+  
+  title <- paste("participant", i, sep="_")
+  
+  
+  nodes <- list_dfs_nodes[[i]]
+  
+  edges <- list_dfs_edges[[i]]
+  
+  
+  
+  CLD <- visNetwork(nodes, edges,
+                    main = title) %>% 
+    visIgraphLayout(layout = "layout_nicely",
+                    randomSeed = 1,
+                    smooth = TRUE) %>% 
+    visEdges(arrows = list(to = list(enabled = TRUE, scaleFactor = 0.75)),
+             color = list(color = "grey")) %>%
+    visNodes(shape = "ellipse") %>%
+ visGroups(groupname = "environment", color = myPalette[1]) %>%
+  visGroups(groupname = "interpersonal", color = myPalette[2]) %>%
+  visGroups(groupname = "individual", color = myPalette[3]) %>%
+  visGroups(groupname = "policy", color = myPalette[4]) %>%
+  visGroups(groupname = "demographics", color = myPalette[5]) %>%
+  visGroups(groupname = "behaviour", color = myPalette[6]) %>%
+  visGroups(groupname = "new", color = myPalette[7]) %>%
+    visLegend(addEdges = legend_edges, 
+              addNodes = legend_nodes, width = 0.25, 
+              useGroups = FALSE, position = "left", main = "Legend", ncol = 2)
+  
+  # print(htmltools::tagList(CLD))
+  
+  #assign each participant's data frame its correct name and add it to the list
+  name <- i
+  list_clds_nicely[[name]] <- CLD
+  
+}
+
+
+```
+
+### "Averaged" CLD export
+The next graphs show all nodes and edges chosen by all participants (not shown in R Markdown)
+Labeled for frequency of use
+Labeled for frequency of use and only showing edges that have been used more than once
+NOTE This code and CLD presentation was not used in the paper
+
+```{r plot_CLDs_edgeuse, echo = FALSE, warning=FALSE, message=FALSE}
+#create data frame with all nodes
+library(data.table)
+
+all_nodes <- rbindlist(list_dfs_nodes, use.names = TRUE)
+
+#remove columns for border width, border color and participant as they are irrelevant now
+all_nodes_final <- all_nodes %>%
+  select(id, label, group) %>%
+  unique()
+
+#create data frame with frequency label for edges using counting_all_edges
+#select from, to, n (that becomes weight)
+all_edges_final <- count_all_edges %>%
+  rename(weight = n) %>%
+  mutate(label = paste(weight, "x", sep = "")) %>%
+  mutate(width = weight) %>%
+  select(from, to, weight, dashes, color, label, width)
+
+
+title1 = "CLD frequency of edge use for all participants"
+
+#in a circle
+edgeuse_circle <- visNetwork(all_nodes_final, all_edges_final,
+           main = title1) %>% 
+  visIgraphLayout(layout = "layout_in_circle",
+                  randomSeed = 1,
+                  smooth = TRUE) %>% 
+  visEdges(arrows = list(to = list(enabled = TRUE, scaleFactor = 0.75)),
+           color = list(color = "grey")) %>%
+  visNodes(shape = "ellipse") %>%
+  visGroups(groupname = "environment", color = myPalette[1]) %>%
+  visGroups(groupname = "interpersonal", color = myPalette[2]) %>%
+  visGroups(groupname = "individual", color = myPalette[3]) %>%
+  visGroups(groupname = "policy", color = myPalette[4]) %>%
+  visGroups(groupname = "demographics", color = myPalette[5]) %>%
+  visGroups(groupname = "new", color = myPalette[6]) %>%
+  visGroups(groupname = "behaviour", color = myPalette[7]) %>%
+  visLegend(addEdges = legend_edges, 
+            addNodes = legend_nodes, width = 0.25, 
+            useGroups = FALSE, position = "left", main = "Legend", ncol = 2)
+
+#layout nicely
+edgeuse_nicely <- visNetwork(all_nodes_final, all_edges_final,
+           main = title1) %>% 
+  visIgraphLayout(layout = "layout_nicely",
+                  randomSeed = 1,
+                  smooth = TRUE) %>% 
+  visEdges(arrows = list(to = list(enabled = TRUE, scaleFactor = 0.75)),
+           color = list(color = "grey")) %>%
+  visNodes(shape = "ellipse") %>%
+  visGroups(groupname = "environment", color = myPalette[1]) %>%
+  visGroups(groupname = "interpersonal", color = myPalette[2]) %>%
+  visGroups(groupname = "individual", color = myPalette[3]) %>%
+  visGroups(groupname = "policy", color = myPalette[4]) %>%
+  visGroups(groupname = "demographics", color = myPalette[5]) %>%
+  visGroups(groupname = "new", color = myPalette[6]) %>%
+  visGroups(groupname = "behaviour", color = myPalette[7]) %>%
+  visLegend(addEdges = legend_edges, 
+            addNodes = legend_nodes, width = 0.25, 
+            useGroups = FALSE, position = "left", main = "Legend", ncol = 2)
+
+#plot CLD only for edges that have been used more than once
+
+title2 = "CLD frequency of edge use (if n>1) for all participants"
+
+all_edges_final2andup <- all_edges_final %>%
+  filter(weight > 1)
+
+#in a circle
+edgeuse2andup_circle <- visNetwork(all_nodes_final, all_edges_final2andup,
+           main = title2) %>% 
+  visIgraphLayout(layout = "layout_in_circle",
+                  randomSeed = 1,
+                  smooth = TRUE) %>% 
+  visEdges(arrows = list(to = list(enabled = TRUE, scaleFactor = 0.75)),
+           color = list(color = "grey")) %>%
+  visNodes(shape = "ellipse") %>%
+  visGroups(groupname = "environment", color = myPalette[1]) %>%
+  visGroups(groupname = "interpersonal", color = myPalette[2]) %>%
+  visGroups(groupname = "individual", color = myPalette[3]) %>%
+  visGroups(groupname = "policy", color = myPalette[4]) %>%
+  visGroups(groupname = "demographics", color = myPalette[5]) %>%
+  visGroups(groupname = "new", color = myPalette[6]) %>%
+  visGroups(groupname = "behaviour", color = myPalette[7]) %>%
+  visLegend(addEdges = legend_edges, 
+            addNodes = legend_nodes, width = 0.25, 
+            useGroups = FALSE, position = "left", main = "Legend", ncol = 2)
+
+#layout nicely
+
+edgeuse2andup_nicely <- visNetwork(all_nodes_final, all_edges_final2andup,
+           main = title2) %>% 
+  visIgraphLayout(layout = "layout_nicely",
+                  randomSeed = 1,
+                  smooth = TRUE) %>% 
+  visEdges(arrows = list(to = list(enabled = TRUE, scaleFactor = 0.75)),
+           color = list(color = "grey")) %>%
+  visNodes(shape = "ellipse") %>%
+  visGroups(groupname = "environment", color = myPalette[1]) %>%
+  visGroups(groupname = "interpersonal", color = myPalette[2]) %>%
+  visGroups(groupname = "individual", color = myPalette[3]) %>%
+  visGroups(groupname = "policy", color = myPalette[4]) %>%
+  visGroups(groupname = "demographics", color = myPalette[5]) %>%
+  visGroups(groupname = "new", color = myPalette[6]) %>%
+  visGroups(groupname = "behaviour", color = myPalette[7]) %>%
+  visLegend(addEdges = legend_edges, 
+            addNodes = legend_nodes, width = 0.25, 
+            useGroups = FALSE, position = "left", main = "Legend", ncol = 2)
+
+list_edgeuse <- list(edgeuse_circle, edgeuse_nicely, edgeuse2andup_circle, edgeuse2andup_nicely)
+
+names_edgeuse <- c("edgeuse_circle", "edgeuse_nicely", "edgeuse2andup_circle", "edgeuse2andup_nicely")
+```
+
+
+### Save CLDs 
+Save CLDs to your local folder (not executed in R Markdown)
+
+```{r save_CLDs, echo = FALSE, warning=FALSE, message=FALSE}
+setwd("...") #set location where you want to export the CLDs to
+
+
+# for (i in 1:length(list_clds)){
+#   number = participant2[[i]]
+#   visSave(list_clds[[i]], file = paste0("CLD_circle_participant_", number, ".html"))
+# }
+# 
+# for (i in 1:length(list_clds_nicely)){
+#   number = participant2[[i]]
+#   visSave(list_clds_nicely[[i]], file = paste0("CLD_nicely_participant_", number, ".html"))
+# }
+# 
+# for (i in 1:length(list_edgeuse)){
+#   name = names_edgeuse[[i]]
+#   visSave(list_edgeuse[[i]], file = paste0("CLD", name, ".html"))
+# }
+
+
+```
+
+
+## End of the document
